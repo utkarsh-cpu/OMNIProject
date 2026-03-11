@@ -1,0 +1,204 @@
+# ============================================================================
+# Solar Data Pipeline Configuration
+# Objective: Extract SDO, JSOC, EVE, and Fenyi solar data for space weather
+#            forecasting (solar flares, ionospheric impact, satellite effects)
+# Period: December 2025, January 2026, February 2026
+# ============================================================================
+
+pipeline:
+  name: "OMNI Solar Flare Data Pipeline"
+  version: "1.0.0"
+  description: >
+    Extracts solar observation data from SDO, JSOC, LASP EVE, and Fenyi
+    sources for solar flare forecasting and Earth space weather impact analysis.
+
+# Target date ranges
+date_ranges:
+  - start: "2025-12-01"
+    end: "2025-12-31"
+    label: "December 2025"
+  - start: "2026-01-01"
+    end: "2026-01-31"
+    label: "January 2026"
+  - start: "2026-02-01"
+    end: "2026-02-28"
+    label: "February 2026"
+
+# Directory structure for downloaded data
+storage:
+  base_dir: "data"
+  raw_dir: "data/raw"
+  processed_dir: "data/processed"
+  metadata_dir: "data/metadata"
+  fits_cache_dir: "data/fits_cache"
+  logs_dir: "logs"
+
+# ===========================================================================
+# Data Source Configurations
+# ===========================================================================
+
+sources:
+  # -------------------------------------------------------------------------
+  # 1. NASA SDO (Solar Dynamics Observatory) - Primary portal
+  # -------------------------------------------------------------------------
+  sdo_nasa:
+    enabled: true
+    base_url: "https://sdo.gsfc.nasa.gov/data/"
+    description: "NASA SDO AIA/HMI browse and near-real-time data"
+    rate_limit:
+      requests_per_second: 2
+      burst_size: 5
+      retry_max: 3
+      retry_backoff_factor: 2.0
+    timeout_seconds: 60
+    # AIA wavelength channels relevant for flare detection
+    aia_channels:
+      - 94    # Fe XVIII  - flare plasma ~6.3 MK
+      - 131   # Fe VIII/XXI - flare/transition region
+      - 171   # Fe IX    - quiet corona ~0.6 MK
+      - 193   # Fe XII/XXIV - corona/hot flare ~1.2/20 MK
+      - 211   # Fe XIV   - active region ~2.0 MK
+      - 304   # He II    - chromosphere/transition region
+      - 335   # Fe XVI   - active region ~2.5 MK
+      - 1600  # C IV + continuum - transition region/upper photosphere
+      - 1700  # Continuum - photosphere
+    # HMI data products
+    hmi_products:
+      - "magnetogram"         # Line-of-sight magnetic field
+      - "intensitygram"       # Continuum intensity
+      - "dopplergram"         # Line-of-sight velocity
+    cadence_minutes: 720  # Sample every 12 hours to limit data volume
+
+  # -------------------------------------------------------------------------
+  # 2. JSOC Stanford - AIA Synoptic Data
+  # -------------------------------------------------------------------------
+  jsoc_stanford:
+    enabled: true
+    base_url: "http://jsoc2.stanford.edu/data/aia/synoptic/"
+    description: "Stanford JSOC AIA synoptic FITS images"
+    rate_limit:
+      requests_per_second: 1
+      burst_size: 3
+      retry_max: 3
+      retry_backoff_factor: 2.0
+    timeout_seconds: 120
+    # URL pattern: {base_url}/{YYYY}/{MM}/{DD}/H{HH}00/
+    # File pattern: AIA{YYYYMMDD}_{HHMMSS}_{WAVELENGTH}.fits
+    wavelengths:
+      - "0094"
+      - "0131"
+      - "0171"
+      - "0193"
+      - "0211"
+      - "0304"
+      - "0335"
+      - "1600"
+      - "1700"
+    # Sampling: one synoptic set per day to manage volume
+    samples_per_day: 2
+    preferred_hours:
+      - "00"
+      - "12"
+
+  # -------------------------------------------------------------------------
+  # 3. LASP EVE (EUV Variability Experiment) Data
+  # -------------------------------------------------------------------------
+  lasp_eve:
+    enabled: true
+    base_url: "https://lasp.colorado.edu/eve/data_access/evewebdata/interactive/"
+    description: "LASP EVE solar EUV irradiance data"
+    rate_limit:
+      requests_per_second: 1
+      burst_size: 2
+      retry_max: 3
+      retry_backoff_factor: 3.0
+    timeout_seconds: 90
+    # EVE data products
+    products:
+      - name: "esp"
+        description: "ESP (EUV SpectroPhotometer) - 0.1-7 nm quad-diode"
+        level: "level2"
+      - name: "megs_a"
+        description: "MEGS-A spectra 6-37 nm"
+        level: "level2"
+      - name: "megs_b"
+        description: "MEGS-B spectra 37-106 nm"
+        level: "level2"
+      - name: "lines"
+        description: "EVE extracted emission lines"
+        level: "level2"
+    # Daily merged spectra
+    merged_spectra: true
+
+  # -------------------------------------------------------------------------
+  # 4. Fenyi Solar Observatory (Hungarian) - SDO Database
+  # -------------------------------------------------------------------------
+  fenyi_observatory:
+    enabled: true
+    base_url: "http://fenyi.solarobs.epss.hun-ren.hu/en/databases/SDO/"
+    description: "Fenyi Solar Observatory SDO database and flare catalog"
+    rate_limit:
+      requests_per_second: 0.5   # Conservative - smaller server
+      burst_size: 2
+      retry_max: 3
+      retry_backoff_factor: 3.0
+    timeout_seconds: 90
+    # Data types to extract
+    data_types:
+      - "flare_catalog"
+      - "active_region_catalog"
+      - "sdo_images"
+
+# ===========================================================================
+# FITS Analysis Configuration
+# ===========================================================================
+
+fits_analysis:
+  # Header keywords to extract as metadata
+  header_keywords:
+    - "DATE-OBS"      # Observation date/time
+    - "WAVELNTH"      # Wavelength
+    - "EXPTIME"       # Exposure time
+    - "QUALITY"       # Data quality flag
+    - "T_OBS"         # Observation time (alternative)
+    - "CRPIX1"        # Reference pixel X
+    - "CRPIX2"        # Reference pixel Y
+    - "CDELT1"        # Pixel scale X (arcsec/pixel)
+    - "CDELT2"        # Pixel scale Y (arcsec/pixel)
+    - "CROTA2"        # Rotation angle
+    - "R_SUN"         # Solar radius in pixels
+    - "DSUN_OBS"      # Distance to Sun (m)
+    - "INSTRUME"      # Instrument name
+    - "TELESCOP"      # Telescope name
+    - "CAMERA"        # Camera identifier
+    - "BITPIX"        # Bits per pixel
+    - "NAXIS1"        # Image width
+    - "NAXIS2"        # Image height
+    - "DATAMEAN"      # Mean data value
+    - "DATARMS"       # RMS of data
+    - "DATAMAX"       # Max data value
+    - "DATAMIN"       # Min data value
+    - "RSUN_OBS"      # Apparent solar radius
+    - "CRLN_OBS"      # Carrington longitude
+    - "CRLT_OBS"      # Carrington latitude
+  
+  # Statistical analysis to perform on image data
+  compute_statistics: true
+  statistics:
+    - "mean"
+    - "std"
+    - "min"
+    - "max"
+    - "median"
+    - "percentile_99"
+
+# ===========================================================================
+# Logging Configuration
+# ===========================================================================
+
+logging:
+  level: "INFO"
+  file: "logs/pipeline.log"
+  format: "%(asctime)s | %(name)-25s | %(levelname)-8s | %(message)s"
+  max_bytes: 10485760   # 10 MB
+  backup_count: 5
