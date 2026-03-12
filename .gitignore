@@ -1,1 +1,6 @@
 .vscode
+__pycache__
+*.pyc
+
+# Large data files
+omni2_full_dataset.csv
