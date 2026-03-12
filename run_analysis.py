@@ -3,7 +3,7 @@ Solar Wind and Geomagnetic Time Series Analysis Pipeline
 
 This script runs a comprehensive analysis of OMNI2 solar wind data including:
 1. Data Preparation and Exploration
-2. Univariate Time Series Forecasting
+2. AutoTS-based Automated Forecasting (replaces manual ETS/ARIMA/SARIMA/LSTM)
 3. Multivariate Time Series Modeling
 4. Correlation and Feature Analysis
 5. Visualization and Results Summary
@@ -17,12 +17,15 @@ Author: Time Series Analysis Module
 import os
 import sys
 import argparse
+import logging
 import warnings
 from datetime import datetime
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 # Add src to path
@@ -39,9 +42,11 @@ from src.analysis.visualization import (
     plot_cross_correlation, plot_model_comparison,
     create_summary_dashboard, save_all_plots
 )
-from src.analysis.univariate_models import (
-    train_test_split_ts, fit_ets, fit_croston, fit_arima, fit_sarima,
-    fit_lstm, check_series_intermittency
+from src.analysis.autots_forecasting import (
+    run_autots_forecasting,
+    run_autots_for_multiple_targets,
+    save_autots_results,
+    plot_autots_forecasts
 )
 from src.analysis.multivariate_models import (
     prepare_multivariate_data, fit_arimax, fit_sarimax, fit_var
@@ -59,15 +64,36 @@ from src.analysis.model_evaluation import (
 # Suppress warnings for cleaner output
 warnings.filterwarnings('ignore')
 
+# --------------------------------------------------------------------------
+# Logging setup
+# --------------------------------------------------------------------------
+def setup_logging(output_dir: str) -> None:
+    """Configure logging to both console and file."""
+    log_dir = os.path.join(output_dir, 'logs')
+    os.makedirs(log_dir, exist_ok=True)
+    log_file = os.path.join(log_dir, 'analysis_pipeline.log')
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+        handlers=[
+            logging.StreamHandler(),
+            logging.FileHandler(log_file, mode='w'),
+        ],
+    )
+
+logger = logging.getLogger(__name__)
+
 # Configuration
 class AnalysisConfig:
     """Configuration for the analysis pipeline."""
     
     # Data paths
     DATA_PATH = 'omni2_full_dataset.csv'
-    OUTPUT_DIR = 'outputs'
-    PLOTS_DIR = 'outputs/plots'
-    RESULTS_DIR = 'outputs/results'
+    OUTPUT_DIR = 'results'
+    PLOTS_DIR = 'results/plots'
+    RESULTS_DIR = 'results/model_results'
+    FORECASTS_DIR = 'results/forecasts'
     
     # Analysis settings
     TARGET_VARIABLES = ['Kp', 'DST', 'AE']
@@ -88,11 +114,11 @@ class AnalysisConfig:
     # Forecasting settings
     FORECAST_HORIZON = 30  # Days to forecast
     
-    # Model settings
-    MAX_ARIMA_P = 5
-    MAX_ARIMA_Q = 5
-    LSTM_LOOKBACK = 30
-    LSTM_EPOCHS = 50
+    # AutoTS settings
+    AUTOTS_MAX_GENERATIONS = 5
+    AUTOTS_NUM_VALIDATIONS = 2
+    AUTOTS_MODEL_LIST = 'fast'
+    AUTOTS_ENSEMBLE = 'simple'
     
     # Output settings
     SAVE_PLOTS = True
@@ -104,7 +130,8 @@ def setup_directories(config: AnalysisConfig):
     os.makedirs(config.OUTPUT_DIR, exist_ok=True)
     os.makedirs(config.PLOTS_DIR, exist_ok=True)
     os.makedirs(config.RESULTS_DIR, exist_ok=True)
-    print(f"Output directories created: {config.OUTPUT_DIR}")
+    os.makedirs(config.FORECASTS_DIR, exist_ok=True)
+    logger.info("Output directories created under: %s", config.OUTPUT_DIR)
 
 
 def run_data_preparation(config: AnalysisConfig) -> pd.DataFrame:
@@ -158,128 +185,71 @@ def run_data_preparation(config: AnalysisConfig) -> pd.DataFrame:
     return df
 
 
-def run_univariate_forecasting(df: pd.DataFrame, 
-                                config: AnalysisConfig,
-                                target: str = 'Kp') -> dict:
+def run_autots_forecasting_step(df: pd.DataFrame,
+                                config: AnalysisConfig) -> dict:
     """
-    Step 2: Univariate Time Series Forecasting
-    
-    - Split data into train/test
-    - Fit ETS, Croston, ARIMA, SARIMA, LSTM models
-    - Evaluate each model
-    - Generate diagnostic plots
+    Step 2: Automated Time Series Forecasting using AutoTS
+
+    AutoTS automatically searches for the best forecasting model and
+    parameters for each target variable, replacing the manual fitting of
+    individual models (ETS, Croston, ARIMA, SARIMA, LSTM).
+
+    - Evaluates multiple models automatically
+    - Selects the best model based on validation metrics
+    - Produces forecasts with confidence intervals for each target
+    - Saves forecasts, model info, and performance summary
+    - Generates forecast plots
     """
     print("\n" + "="*70)
-    print(f"STEP 2: UNIVARIATE FORECASTING - {target}")
+    print("STEP 2: AUTOMATED FORECASTING (AutoTS)")
     print("="*70)
-    
-    # Prepare series
-    series = df[target].dropna()
-    
-    # Check if series is intermittent
-    intermittency = check_series_intermittency(series)
-    print(f"\nSeries characteristics: {intermittency['classification']}")
-    print(f"Recommendation: {intermittency['recommendation']}")
-    
-    # Train/test split
-    train, test = train_test_split_ts(series, test_size=config.TEST_SIZE)
-    
-    results = {}
-    
-    # 1. Exponential Smoothing (ETS)
-    print("\n--- Fitting ETS ---")
-    try:
-        ets_result = fit_ets(train, test, seasonal_periods=None, auto_select=True)
-        results['ETS'] = ets_result
-        metrics = compute_forecast_metrics(test, ets_result.forecast, train)
-        print_evaluation_report(metrics, 'ETS')
-    except Exception as e:
-        print(f"ETS failed: {e}")
-    
-    # 2. Croston (if intermittent)
-    if intermittency['is_intermittent']:
-        print("\n--- Fitting Croston ---")
-        try:
-            croston_result = fit_croston(train, test, alpha=0.1)
-            results['Croston'] = croston_result
-            metrics = compute_forecast_metrics(test, croston_result.forecast, train)
-            print_evaluation_report(metrics, 'Croston')
-        except Exception as e:
-            print(f"Croston failed: {e}")
-    
-    # 3. ARIMA
-    print("\n--- Fitting ARIMA ---")
-    try:
-        arima_result = fit_arima(train, test, auto_select=True, 
-                                 max_p=config.MAX_ARIMA_P, max_q=config.MAX_ARIMA_Q)
-        results['ARIMA'] = arima_result
-        metrics = compute_forecast_metrics(test, arima_result.forecast, train)
-        residual_analysis = perform_residual_analysis(arima_result.residuals, 'ARIMA')
-        print_evaluation_report(metrics, 'ARIMA', residual_analysis)
-    except Exception as e:
-        print(f"ARIMA failed: {e}")
-    
-    # 4. SARIMA (if enough data)
-    if len(train) > 100:
-        print("\n--- Fitting SARIMA ---")
-        try:
-            sarima_result = fit_sarima(train, test, auto_select=True)
-            results['SARIMA'] = sarima_result
-            metrics = compute_forecast_metrics(test, sarima_result.forecast, train)
-            print_evaluation_report(metrics, 'SARIMA')
-        except Exception as e:
-            print(f"SARIMA failed: {e}")
-    
-    # 5. LSTM
-    print("\n--- Fitting LSTM ---")
-    try:
-        lstm_result = fit_lstm(train, test, 
-                               lookback=min(config.LSTM_LOOKBACK, len(train)//4),
-                               epochs=config.LSTM_EPOCHS, verbose=0)
-        results['LSTM'] = lstm_result
-        metrics = compute_forecast_metrics(test, lstm_result.forecast, train)
-        print_evaluation_report(metrics, 'LSTM')
-    except Exception as e:
-        print(f"LSTM failed: {e}")
-    
-    # Compare models
-    if results:
-        print("\n--- Model Comparison ---")
-        comparison_df = evaluate_models(results, test, train)
-        print(comparison_df[['model', 'MAE', 'RMSE', 'MAPE', 'R2']].to_string(index=False))
-        comparison_df.to_csv(
-            os.path.join(config.RESULTS_DIR, f'model_comparison_{target}.csv'), 
-            index=False
-        )
-        
-        # Generate plots
-        if config.SAVE_PLOTS:
-            # Forecast vs actual for best model
-            best_model_name = comparison_df.iloc[0]['model']
-            best_result = results[best_model_name]
-            fig = plot_forecast_vs_actual(
-                test, best_result.forecast, 
-                confidence_intervals=best_result.confidence_intervals,
-                train=train,
-                model_name=best_model_name,
-                variable_name=target
+    logger.info("Starting AutoTS forecasting step")
+
+    # Run AutoTS for all target variables
+    available_targets = [t for t in config.TARGET_VARIABLES if t in df.columns]
+    logger.info("Target variables: %s", available_targets)
+
+    autots_results = run_autots_for_multiple_targets(
+        df,
+        target_columns=available_targets,
+        forecast_length=config.FORECAST_HORIZON,
+        frequency='infer',
+        ensemble=config.AUTOTS_ENSEMBLE,
+        model_list=config.AUTOTS_MODEL_LIST,
+        max_generations=config.AUTOTS_MAX_GENERATIONS,
+        num_validations=config.AUTOTS_NUM_VALIDATIONS,
+        validation_method='backwards',
+    )
+
+    # Save results (forecasts + model info + performance summary)
+    if autots_results:
+        performance_df = save_autots_results(autots_results, config.OUTPUT_DIR)
+
+        # Print performance summary
+        print("\n--- AutoTS Model Performance Summary ---")
+        print(performance_df.to_string(index=False))
+
+        # Log best models
+        for target, (_, _model, metrics) in autots_results.items():
+            best = metrics.get('best_model', 'Unknown')
+            mae = metrics.get('MAE', float('nan'))
+            rmse = metrics.get('RMSE', float('nan'))
+            smape = metrics.get('sMAPE', float('nan'))
+            t_time = metrics.get('training_time_seconds', 0)
+            logger.info(
+                "%s — Best model: %s | MAE=%.4f RMSE=%.4f sMAPE=%.4f | "
+                "Training time: %.1fs",
+                target, best, mae, rmse, smape, t_time,
             )
-            fig.savefig(os.path.join(config.PLOTS_DIR, f'forecast_{target}_{best_model_name}.{config.PLOT_FORMAT}'))
-            plt.close(fig)
-            
-            # Residual diagnostics
-            if best_result.residuals is not None:
-                fig = plot_residual_diagnostics(best_result.residuals, best_model_name)
-                fig.savefig(os.path.join(config.PLOTS_DIR, f'residuals_{target}_{best_model_name}.{config.PLOT_FORMAT}'))
-                plt.close(fig)
-            
-            # Model comparison bar chart
-            fig = plot_model_comparison(comparison_df.set_index('model'), metric='RMSE',
-                                        title=f'Model Comparison - {target}')
-            fig.savefig(os.path.join(config.PLOTS_DIR, f'model_comparison_{target}.{config.PLOT_FORMAT}'))
-            plt.close(fig)
-    
-    return {'results': results, 'train': train, 'test': test}
+
+        # Generate forecast plots
+        if config.SAVE_PLOTS:
+            plot_autots_forecasts(
+                autots_results, df, config.PLOTS_DIR,
+                plot_format=config.PLOT_FORMAT,
+            )
+
+    return {'autots_results': autots_results}
 
 
 def run_multivariate_modeling(df: pd.DataFrame,
@@ -495,7 +465,7 @@ def run_visualization(df: pd.DataFrame, config: AnalysisConfig):
 
 
 def generate_final_summary(config: AnalysisConfig,
-                            model_results: dict,
+                            autots_step_results: dict,
                             correlation_summary: pd.DataFrame):
     """
     Step 6: Generate final results summary
@@ -503,18 +473,32 @@ def generate_final_summary(config: AnalysisConfig,
     print("\n" + "="*70)
     print("STEP 6: GENERATING FINAL SUMMARY")
     print("="*70)
+    logger.info("Generating final summary")
     
-    # Load model comparisons
+    # Build model comparison from AutoTS results
     all_comparisons = []
+    autots_results = autots_step_results.get('autots_results', {})
+    for target, (_forecast, _model, metrics) in autots_results.items():
+        row = {
+            'model': metrics.get('best_model', 'AutoTS'),
+            'MAE': metrics.get('MAE', np.nan),
+            'RMSE': metrics.get('RMSE', np.nan),
+            'sMAPE': metrics.get('sMAPE', np.nan),
+            'R2': np.nan,
+            'target_variable': target,
+        }
+        all_comparisons.append(row)
+
+    # Also check for saved CSVs from multivariate step (backward compat)
     for target in config.TARGET_VARIABLES:
-        comparison_file = os.path.join(config.RESULTS_DIR, f'model_comparison_{target}.csv')
+        comparison_file = os.path.join(config.RESULTS_DIR, f'multivariate_comparison_{target}.csv')
         if os.path.exists(comparison_file):
             comp_df = pd.read_csv(comparison_file)
             comp_df['target_variable'] = target
-            all_comparisons.append(comp_df)
+            all_comparisons.extend(comp_df.to_dict(orient='records'))
     
     if all_comparisons:
-        combined_comparison = pd.concat(all_comparisons, ignore_index=True)
+        combined_comparison = pd.DataFrame(all_comparisons)
     else:
         combined_comparison = pd.DataFrame()
     
@@ -563,7 +547,7 @@ def main():
     parser = argparse.ArgumentParser(description='Solar Wind Time Series Analysis')
     parser.add_argument('--data', type=str, default='omni2_full_dataset.csv',
                         help='Path to dataset')
-    parser.add_argument('--output', type=str, default='outputs',
+    parser.add_argument('--output', type=str, default='results',
                         help='Output directory')
     parser.add_argument('--start-date', type=str, default='2010-01-01',
                         help='Start date for analysis')
@@ -575,8 +559,6 @@ def main():
                         help='Primary target variable')
     parser.add_argument('--no-plots', action='store_true',
                         help='Disable plot generation')
-    parser.add_argument('--skip-lstm', action='store_true',
-                        help='Skip LSTM model (faster)')
     
     args = parser.parse_args()
     
@@ -585,14 +567,15 @@ def main():
     config.DATA_PATH = args.data
     config.OUTPUT_DIR = args.output
     config.PLOTS_DIR = os.path.join(args.output, 'plots')
-    config.RESULTS_DIR = os.path.join(args.output, 'results')
+    config.RESULTS_DIR = os.path.join(args.output, 'model_results')
+    config.FORECASTS_DIR = os.path.join(args.output, 'forecasts')
     config.START_DATE = args.start_date
     config.END_DATE = args.end_date
     config.RESAMPLE_FREQ = args.resample if args.resample != 'None' else None
     config.SAVE_PLOTS = not args.no_plots
     
-    if args.skip_lstm:
-        config.LSTM_EPOCHS = 0
+    # Setup logging
+    setup_logging(config.OUTPUT_DIR)
     
     print("\n" + "="*70)
     print("SOLAR WIND AND GEOMAGNETIC TIME SERIES ANALYSIS")
@@ -602,6 +585,11 @@ def main():
     print(f"Date Range: {config.START_DATE} to {config.END_DATE}")
     print(f"Resampling: {config.RESAMPLE_FREQ or 'None (hourly)'}")
     
+    logger.info("Pipeline started")
+    logger.info("Data: %s | Range: %s to %s | Resampling: %s",
+                config.DATA_PATH, config.START_DATE, config.END_DATE,
+                config.RESAMPLE_FREQ or 'hourly')
+    
     # Setup directories
     setup_directories(config)
     
@@ -610,16 +598,8 @@ def main():
         # Step 1: Data Preparation
         df = run_data_preparation(config)
         
-        # Step 2: Univariate Forecasting (for primary target)
-        univariate_results = run_univariate_forecasting(df, config, target=args.target)
-        
-        # Run for other targets (optional)
-        for target in config.TARGET_VARIABLES:
-            if target != args.target and target in df.columns:
-                try:
-                    run_univariate_forecasting(df, config, target=target)
-                except Exception as e:
-                    print(f"Warning: Could not analyze {target}: {e}")
+        # Step 2: AutoTS Forecasting (replaces individual ETS/ARIMA/SARIMA/LSTM)
+        autots_results = run_autots_forecasting_step(df, config)
         
         # Step 3: Multivariate Modeling
         multivariate_results = run_multivariate_modeling(df, config, target=args.target)
@@ -631,11 +611,13 @@ def main():
         run_visualization(df, config)
         
         # Step 6: Final Summary
-        summary = generate_final_summary(config, univariate_results, correlation_summary)
+        summary = generate_final_summary(config, autots_results, correlation_summary)
         
+        logger.info("Pipeline completed successfully")
         print(f"\nEnd Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         
     except Exception as e:
+        logger.exception("Error during analysis: %s", e)
         print(f"\nError during analysis: {e}")
         import traceback
         traceback.print_exc()

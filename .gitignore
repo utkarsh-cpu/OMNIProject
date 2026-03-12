@@ -4,3 +4,7 @@ __pycache__
 
 # Large data files
 omni2_full_dataset.csv
+
+# Runtime output directories
+results/
+outputs/

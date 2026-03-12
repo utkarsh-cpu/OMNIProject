@@ -3,7 +3,7 @@ Solar Wind and Geomagnetic Time Series Analysis Package
 
 This package provides modular functions for:
 - Data preprocessing and exploration
-- Univariate time series forecasting (ETS, Croston, ARIMA, SARIMA, LSTM)
+- Automated time series forecasting via AutoTS
 - Multivariate time series modeling (ARIMAX, SARIMAX, VAR)
 - Correlation and feature analysis
 - Model evaluation and diagnostics
@@ -34,13 +34,11 @@ from .visualization import (
     save_all_plots
 )
 
-from .univariate_models import (
-    fit_ets,
-    fit_croston,
-    fit_arima,
-    fit_sarima,
-    fit_lstm,
-    train_test_split_ts
+from .autots_forecasting import (
+    run_autots_forecasting,
+    run_autots_for_multiple_targets,
+    save_autots_results,
+    plot_autots_forecasts
 )
 
 from .multivariate_models import (
@@ -71,11 +69,11 @@ __all__ = [
     'perform_stationarity_tests', 'resample_data', 'normalize_data',
     # Visualization
     'plot_time_series', 'plot_acf_pacf', 'plot_forecast_vs_actual',
-    'plot_residual_diagnostics', 'plot_correlation_heatmap', 
+    'plot_residual_diagnostics', 'plot_correlation_heatmap',
     'plot_cross_correlation', 'save_all_plots',
-    # Univariate models
-    'fit_ets', 'fit_croston', 'fit_arima', 'fit_sarima', 'fit_lstm',
-    'train_test_split_ts',
+    # AutoTS forecasting
+    'run_autots_forecasting', 'run_autots_for_multiple_targets',
+    'save_autots_results', 'plot_autots_forecasts',
     # Multivariate models
     'fit_arimax', 'fit_sarimax', 'fit_var',
     # Correlation analysis
