@@ -439,15 +439,17 @@ def _extract_metrics(
     try:
         results_df = model.results()
         if results_df is not None and not results_df.empty:
-            # The first row (index 0) is the best model
+            # AutoTS results may use different casing across versions;
+            # check both lowercase and uppercase variants and normalise.
             best_row = results_df.iloc[0]
-            for metric_name in ["mae", "rmse", "smape", "spl",
-                                "MAE", "RMSE", "sMAPE", "SPL"]:
-                if metric_name in best_row.index:
-                    canonical = metric_name.upper()
-                    if canonical == "SMAPE":
-                        canonical = "sMAPE"
+            seen = set()
+            for metric_name in best_row.index:
+                canonical = metric_name.upper()
+                if canonical == "SMAPE":
+                    canonical = "sMAPE"
+                if canonical in {"MAE", "RMSE", "sMAPE", "SPL"} and canonical not in seen:
                     metrics[canonical] = float(best_row[metric_name])
+                    seen.add(canonical)
     except Exception:
         logger.debug("Could not extract detailed metrics from AutoTS results.")
 

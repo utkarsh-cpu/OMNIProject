@@ -483,7 +483,7 @@ def generate_final_summary(config: AnalysisConfig,
             'model': metrics.get('best_model', 'AutoTS'),
             'MAE': metrics.get('MAE', np.nan),
             'RMSE': metrics.get('RMSE', np.nan),
-            'MAPE': metrics.get('sMAPE', np.nan),
+            'sMAPE': metrics.get('sMAPE', np.nan),
             'R2': np.nan,
             'target_variable': target,
         }
